@@ -1,0 +1,49 @@
+{
+    "manifest_version": 3,
+    "name": "taxLawExtension",
+    "version": "1.0",
+    "description": "판례 요약 및 관리 도구",
+    "permissions": [
+        "storage",
+        "activeTab",
+        "system.display",
+        "webRequest",
+        "declarativeContent",
+        "tabs"
+    ],
+    "host_permissions": [
+        "*://*.nts.go.kr/*",
+        "http://localhost:3000/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_popup": "popup.html"
+    },
+    "content_scripts": [
+        {
+            "matches": ["*://*.nts.go.kr/*"],
+            "js": ["content.js"],
+            "run_at": "document_start",
+            "all_frames": true
+        }
+    ],
+    "commands": {
+        "capture-text": {
+            "suggested_key": {
+                "default": "Ctrl+Q"
+            },
+            "description": "캡처 실행"
+        },
+        "show-panel": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+Q"
+            },
+            "description": "사이드 패널 표시"
+        }
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+    }
+}
