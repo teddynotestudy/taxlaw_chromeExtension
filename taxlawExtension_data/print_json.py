@@ -117,6 +117,32 @@ def html_to_markdown(html_content, doc_type=None):
     """
     soup = BeautifulSoup(html_content, "html.parser")
 
+    #! 표 형식 문서 처리
+    # TODO : 중간에 표가 들어간 Case도 존재함 (조심-2018-서-2615)
+    content_div = soup.find("div", id="cntnWrap_html")
+    # 첫 번째 의미있는 내용을 찾음
+    first_meaningful_content = find_first_meaningful_content(content_div)
+
+    # 표 형식 문서인지 확인
+    is_table_format = is_table_format_document(content_div)
+
+    # 표 형식 문서인 경우 가장 바깥쪽 표의 내용만 추출하여 새로운 soup 생성
+    if is_table_format and first_meaningful_content:
+        # 표 내부의 td 내용만 추출하여 새로운 div 생성
+        new_html = "<div>"
+        for td in first_meaningful_content.find_all("td"):
+            # td의 HTML 내용을 그대로 가져옴
+            new_html += str(td.decode_contents())
+        new_html += "</div>"
+
+        # 새로운 soup 생성
+        new_content = BeautifulSoup(new_html, "html.parser")
+
+        # 기존 content_div를 새로운 내용으로 교체
+        content_div.clear()
+        content_div.extend(new_content.div.contents)
+        soup = BeautifulSoup(str(content_div), "html.parser")
+
     # 표 제목 패턴을 위한 정규표현식 추가
     table_title_pattern1 = re.compile(r"^[\(]*\s*표\s*\d*[\)]")
     table_title_pattern2 = re.compile(r"^[<]*\s*표\s*\d*[>]")
@@ -379,6 +405,56 @@ def parse_interpretation_structure(content):
         markdown_lines.append("    " + " ".join(current_paragraph))
 
     return "\n\n".join(markdown_lines)
+
+
+#! 테이블로 이루어진 문서 처리
+def find_first_meaningful_content(content_div):
+    """
+    div 내에서 첫 번째 의미있는 내용을 찾아 반환
+
+    Args:
+        content_div: BeautifulSoup div 요소
+
+    Returns:
+        BeautifulSoup element: 첫 번째 의미있는 내용을 담고 있는 요소
+        None: 의미있는 내용을 찾지 못한 경우
+    """
+    for element in content_div.children:
+        if element.name in ["p", "table"]:
+            # p 태그인 경우
+            if element.name == "p":
+                text = element.get_text(strip=True)
+                if text and text != "\xa0":  # \xa0는 &nbsp;
+                    return element
+            # table 태그이면서 sebeop_t 클래스를 가진 경우
+            elif (
+                element.name == "table"
+                and element.get("class")
+                and "sebeop_t" in element.get("class")
+            ):
+                return element
+    return None
+
+
+def is_table_format_document(content_div):
+    """
+    문서가 표 형식으로 시작하는지 판단
+
+    Args:
+        content_div: BeautifulSoup div 요소
+
+    Returns:
+        bool: 표 형식이면 True, 아니면 False
+    """
+    # 첫 번째 의미있는 내용을 찾음
+    first_meaningful_content = find_first_meaningful_content(content_div)
+
+    # 표 형식 문서 여부 판단
+    return (
+        first_meaningful_content
+        and first_meaningful_content.name == "table"
+        and "sebeop_t" in first_meaningful_content.get("class", [])
+    )
 
 
 def main():
