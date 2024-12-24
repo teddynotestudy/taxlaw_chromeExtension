@@ -109,41 +109,59 @@ def parse_structure(content):
 
 
 def html_to_markdown(html_content, doc_type=None):
-    """HTML을 마크다운으로 변환
+    """
+    HTML 콘텐츠를 마크다운 형식으로 변환하는 함수
 
     Args:
         html_content (str): 변환할 HTML 문자열
-        doc_type (str): 문서 유형 ('판례', '심판례' 또는 기타)
+        doc_type (str, optional): 문서 유형 ('판례', '심판례', 기타). 기본값은 None.
+
+    Returns:
+        str: 변환된 마크다운 문자열
     """
     soup = BeautifulSoup(html_content, "html.parser")
-
-    #! 표 형식 문서 처리
-    # TODO : 중간에 표가 들어간 Case도 존재함 (조심-2018-서-2615)
     content_div = soup.find("div", id="cntnWrap_html")
-    # 첫 번째 의미있는 내용을 찾음
-    first_meaningful_content = find_first_meaningful_content(content_div)
 
-    # 표 형식 문서인지 확인
-    is_table_format = is_table_format_document(content_div)
+    #! 문서 구조 분석
+    doc_structure = analyze_document_structure(html_content)
 
-    # 표 형식 문서인 경우 가장 바깥쪽 표의 내용만 추출하여 새로운 soup 생성
-    if is_table_format and first_meaningful_content:
-        # 표 내부의 td 내용만 추출하여 새로운 div 생성
-        new_html = "<div>"
-        for td in first_meaningful_content.find_all("td"):
-            # td의 HTML 내용을 그대로 가져옴
-            new_html += str(td.decode_contents())
-        new_html += "</div>"
+    # 전체 또는 주요 내용이 테이블에 있는 경우 처리
+    if doc_structure in ["table_only", "dominant_table"]:
+        # 가장 큰 table 찾기
+        tables = content_div.find_all("table", class_="sebeop_t")
+        main_table = None
+        max_content_length = 0
 
-        # 새로운 soup 생성
-        new_content = BeautifulSoup(new_html, "html.parser")
+        for table in tables:
+            content_length = len(table.get_text(strip=True))
+            if content_length > max_content_length:
+                max_content_length = content_length
+                main_table = table
 
-        # 기존 content_div를 새로운 내용으로 교체
-        content_div.clear()
-        content_div.extend(new_content.div.contents)
+        if main_table:
+            # table 내부의 모든 내용을 순서대로 추출
+            new_html = "<div>"
+            for element in main_table.descendants:
+                if element.name == "td":  # td 태그를 만나면 내용 유지
+                    new_html += str(element.decode_contents())
+            new_html += "</div>"
+
+            # 새로운 soup 생성
+            new_content = BeautifulSoup(new_html, "html.parser")
+
+        if doc_structure == "table_only":
+            # 기존 content_div를 새로운 내용으로 교체
+            content_div.clear()
+            content_div.extend(new_content.div.contents)
+
+        else:  # dominant_table인 경우
+            # main_table을 새로운 내용으로 교체
+            main_table.clear()
+            main_table.extend(new_content.div.contents)
+
         soup = BeautifulSoup(str(content_div), "html.parser")
 
-    # 표 제목 패턴을 위한 정규표현식 추가
+    # 테이블 제목 및 단위 탐지 패턴 정의
     table_title_pattern1 = re.compile(r"^[\(]*\s*표\s*\d*[\)]")
     table_title_pattern2 = re.compile(r"^[<]*\s*표\s*\d*[>]")
     unit_pattern = re.compile(r"\(단위\s*:.*?\)")
@@ -153,22 +171,22 @@ def html_to_markdown(html_content, doc_type=None):
         markdown = []
 
         for element in soup.find_all(["p", "table"]):
-            if element.parent.name == "td":  # 테이블 셀 안의 p 태그는 건너뛰기
+            if element.parent.name == "td":  # table cell 내부의 <p>는 제외
                 continue
 
             if element.name == "table":
-                # 테이블 관련 텍스트 수집
+                # 테이블 제목과 단위 추출
                 table_title = None
                 table_unit = None
                 current = element
 
-                # 이전 p 태그들 검사
+                # 이전 <p> 태그에서 테이블 제목과 단위 탐지
                 while current.previous_sibling:
                     current = current.previous_sibling
                     # 다른 테이블을 만나면 검색 중단
                     if current.name == "table":
                         break
-                    # p 태그이고 텍스트가 있는 경우만 검사
+                    # <p> 고 텍스트가 있는 경우만 검사
                     if current.name == "p":
                         text = current.get_text().strip()
                         if "단위" in text:
@@ -179,7 +197,7 @@ def html_to_markdown(html_content, doc_type=None):
                             table_title = text
                             break
 
-                # 테이블 제목과 단위를 결합
+                # 제목과 단위를 결합
                 combined_title = ""
                 if table_title:
                     combined_title = table_title
@@ -199,7 +217,7 @@ def html_to_markdown(html_content, doc_type=None):
                         or table_title_pattern2.search(text)
                     )
                     and not unit_pattern.search(text)
-                ):  # 테이블 제목은 제외
+                ):  # 테이블 제목 제외
                     markdown.append(text)
 
         # return parse_structure("\n".join(markdown))
@@ -249,11 +267,17 @@ def convert_table_to_markdown(table, title=""):
 
     # 테이블 데이터 추출
     rows = table.find_all("tr")
+    if not rows:  # 테이블이 비어있는 경우
+        return ""
+
     table_data = []  # 데이터 저장
     rowspan_tracker = {}  # rowspan을 추적
 
     for row_idx, row in enumerate(rows):
         cols = row.find_all(["td", "th"])
+        if not cols:  # 빈 행은 건너뛰기
+            continue
+
         row_data = []
         col_idx = 0  # 현재 열 인덱스
 
@@ -285,7 +309,12 @@ def convert_table_to_markdown(table, title=""):
             rowspan_tracker[col_idx] -= 1
             col_idx += 1
 
-        table_data.append(row_data)
+        if row_data:  # 데이터가 있는 행만 추가
+            table_data.append(row_data)
+
+    # 테이블 데이터가 비어있는 경우
+    if not table_data:
+        return ""
 
     # 데이터프레임 생성 및 마크다운 변환
     max_cols = max(len(row) for row in table_data)
@@ -407,54 +436,79 @@ def parse_interpretation_structure(content):
     return "\n\n".join(markdown_lines)
 
 
-#! 테이블로 이루어진 문서 처리
-def find_first_meaningful_content(content_div):
+#! 문서 유형 분류
+def is_all_content_in_table(content_div):
     """
-    div 내에서 첫 번째 의미있는 내용을 찾아 반환
+    Checks if all meaningful content is contained within a single main table.
 
     Args:
-        content_div: BeautifulSoup div 요소
+        content_div (BeautifulSoup object): 문서 컨텐츠를 담고 있는 div element.
 
     Returns:
-        BeautifulSoup element: 첫 번째 의미있는 내용을 담고 있는 요소
-        None: 의미있는 내용을 찾지 못한 경우
+        bool: 모든 내용이 하나의 table 안에 있으면 True, 아니면 False
     """
-    for element in content_div.children:
-        if element.name in ["p", "table"]:
-            # p 태그인 경우
-            if element.name == "p":
-                text = element.get_text(strip=True)
-                if text and text != "\xa0":  # \xa0는 &nbsp;
-                    return element
-            # table 태그이면서 sebeop_t 클래스를 가진 경우
-            elif (
-                element.name == "table"
-                and element.get("class")
-                and "sebeop_t" in element.get("class")
-            ):
-                return element
-    return None
+    # Locate the first main table with the "sebeop_t" class
+    main_table = None
+    for element in content_div.find_all(
+        "table", recursive=True
+    ):  # 모든 하위 table 검색
+        if element.get("class") and "sebeop_t" in element.get("class"):
+            main_table = element
+            break
+
+    if not main_table:
+        return False
+
+    # table 외부에 의미있는 내용이 있는지 확인
+    meaningful_content_outside = False
+    for element in content_div.find_all("p", recursive=True):  # 모든 하위 p 태그 검색
+        # table 내부의 p 태그는 제외
+        if not element.find_parent("table", class_="sebeop_t"):
+            text = element.get_text(strip=True)
+            # 의미있는 텍스트가 있다면
+            if text and text != "\xa0":  # \xa0는 &nbsp;
+                meaningful_content_outside = True
+                break
+
+    # table 외부에 의미있는 내용이 없으면 True
+    return not meaningful_content_outside
 
 
-def is_table_format_document(content_div):
+def analyze_document_structure(html_content):
     """
-    문서가 표 형식으로 시작하는지 판단
+    문서의 구조를 분석하여 문서 유형을 판단
 
     Args:
-        content_div: BeautifulSoup div 요소
+        html_content (str): HTML content as a string.
 
     Returns:
-        bool: 표 형식이면 True, 아니면 False
+        str: 문서 유형
+            - "table_only": 모든 내용이 하나의 table에 있는 경우
+            - "dominant_table": 하나의 큰 표가 문서의 주요 부분을 차지하는 특수한 경우
+            - "normal": 일반적인 형태의 경우
     """
-    # 첫 번째 의미있는 내용을 찾음
-    first_meaningful_content = find_first_meaningful_content(content_div)
+    # Parse the HTML content
+    soup = BeautifulSoup(html_content, "html.parser")
+    content_div = soup.find("div", id="cntnWrap_html")
 
-    # 표 형식 문서 여부 판단
-    return (
-        first_meaningful_content
-        and first_meaningful_content.name == "table"
-        and "sebeop_t" in first_meaningful_content.get("class", [])
-    )
+    if not content_div:
+        return "normal"
+
+    # 모든 내용이 하나의 table 안에 있는지 확인
+    if is_all_content_in_table(content_div):
+        return "table_only"
+
+    # table_only가 아닌 경우, table 내용 비율로 판단
+    tables = content_div.find_all("table", class_="sebeop_t")
+    if tables:
+        max_content_length = max(len(table.get_text(strip=True)) for table in tables)
+        total_content_length = len(content_div.get_text(strip=True))
+        table_ratio = max_content_length / total_content_length
+
+        if table_ratio > 0.5:  # table이 전체 내용의 50% 이상
+            return "dominant_table"
+
+    return "normal"
 
 
 def main():
